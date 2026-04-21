@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Product;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ProductController extends Controller
 {
@@ -60,10 +61,26 @@ class ProductController extends Controller
     }
 
     // GET /api/products/search?name=xxx — Fitur pencarian
-    public function search(Request $request)
-    {
-        $query = $request->get('name');
-        $products = Product::where('name', 'like', "%$query%")->get();
-        return response()->json($products, 200);
+public function search(Request $request)
+{
+
+    $keyword = $request->query('name');
+
+    $products = DB::table('products')
+                ->where('name', 'LIKE', '%' . $keyword . '%')
+                ->get();
+
+    if ($products->count() > 0) {
+        return response()->json([
+            'status' => 'Success',
+            'data' => $products
+        ], 200);
     }
+
+    return response()->json([
+        'status' => 'Failed',
+        'message' => 'Produk tidak ditemukan di database.',
+        'keyword_yang_dicari' => $keyword
+    ], 404);
+}
 }
