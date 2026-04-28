@@ -51,7 +51,7 @@ exports.createOrder = async (req, res) => {
   }
 
   try {
-    // ── CONSUMER: Ambil data user dari UserService ──
+    // STEP 1: Ambil data user dari UserService
     let user;
     try {
       const userRes = await axios.get(`${USER_SERVICE}/api/users/${user_id}`);
@@ -59,12 +59,10 @@ exports.createOrder = async (req, res) => {
     } catch {
       return res
         .status(404)
-        .json({
-          message: `User dengan ID ${user_id} tidak ditemukan di UserService`,
-        });
+        .json({ message: `User ID ${user_id} tidak ditemukan` });
     }
 
-    // ── CONSUMER: Ambil data produk dari ProductService ──
+    // STEP 2: Ambil data produk dari ProductService
     let product;
     try {
       const productRes = await axios.get(
@@ -74,28 +72,48 @@ exports.createOrder = async (req, res) => {
     } catch {
       return res
         .status(404)
-        .json({
-          message: `Produk dengan ID ${product_id} tidak ditemukan di ProductService`,
-        });
+        .json({ message: `Product ID ${product_id} tidak ditemukan` });
     }
 
-    // Hitung total harga
-    const total_price = product.price * quantity;
+    //  STEP 3: Cek stok cukup atau tidak 
+    if (product.stock < quantity) {
+      return res.status(400).json({
+        message: `Stok tidak mencukupi. Stok tersedia: ${product.stock}, diminta: ${quantity}`,
+      });
+    }
 
-    // Simpan order ke database
+    // STEP 4: Hitung total harga
+    const total_price = parseFloat(product.price) * quantity;
+
+    // STEP 5: Simpan order ke database
     const [result] = await db.execute(
       "INSERT INTO orders (user_id, product_id, quantity, total_price, status) VALUES (?, ?, ?, ?, ?)",
       [user_id, product_id, quantity, total_price, "pending"],
     );
 
+    //STEP 6: Kurangi stok di ProductService
+    try {
+      await axios.put(
+        `${PRODUCT_SERVICE}/api/products/${product_id}/reduce-stock`,
+        {
+          quantity: parseInt(quantity),
+        },
+      );
+    } catch (stockErr) {
+      // Order sudah tersimpan, tapi stok gagal dikurangi
+      // Log error tapi jangan batalkan order
+      console.error("[OrderService] Gagal mengurangi stok:", stockErr.message);
+    }
+
+    // STEP 7: Response sukses
     res.status(201).json({
       message: "Order berhasil dibuat",
       order_id: result.insertId,
       user_name: user.name,
-      user_email: user.email,
       product_name: product.name,
       quantity,
       total_price,
+      stok_tersisa: product.stock - quantity, // ← info sisa stok
       status: "pending",
     });
   } catch (err) {
