@@ -29,7 +29,7 @@ class ProductController extends Controller
     public function store(Request $request)
     {
         $request->validate([
-            'name'  => 'required|string',
+            'name' => 'required|string',
             'price' => 'required|numeric|min:0',
             'stock' => 'required|integer|min:0',
         ]);
@@ -49,6 +49,37 @@ class ProductController extends Controller
         return response()->json($product, 200);
     }
 
+    // PUT /api/products/{id}/reduce-stock — dipanggil oleh OrderService
+    public function reduceStock(Request $request, $id)
+    {
+        $product = Product::find($id);
+        if (!$product) {
+            return response()->json(['message' => 'Product not found'], 404);
+        }
+
+        $quantity = $request->quantity;
+
+        // Cek stok cukup atau tidak
+        if ($product->stock < $quantity) {
+            return response()->json([
+                'message' => 'Stok tidak mencukupi',
+                'stok_tersedia' => $product->stock,
+                'diminta' => $quantity
+            ], 400);
+        }
+
+        // Kurangi stok
+        $product->stock = $product->stock - $quantity;
+        $product->save();
+
+        return response()->json([
+            'message' => 'Stok berhasil dikurangi',
+            'product_id' => $product->id,
+            'stok_sebelum' => $product->stock + $quantity,
+            'stok_sesudah' => $product->stock
+        ], 200);
+    }
+
     // DELETE /api/products/{id} — Hapus produk
     public function destroy($id)
     {
@@ -61,26 +92,26 @@ class ProductController extends Controller
     }
 
     // GET /api/products/search?name=xxx — Fitur pencarian
-public function search(Request $request)
-{
+    public function search(Request $request)
+    {
 
-    $keyword = $request->query('name');
+        $keyword = $request->query('name');
 
-    $products = DB::table('products')
-                ->where('name', 'LIKE', '%' . $keyword . '%')
-                ->get();
+        $products = DB::table('products')
+            ->where('name', 'LIKE', '%' . $keyword . '%')
+            ->get();
 
-    if ($products->count() > 0) {
+        if ($products->count() > 0) {
+            return response()->json([
+                'status' => 'Success',
+                'data' => $products
+            ], 200);
+        }
+
         return response()->json([
-            'status' => 'Success',
-            'data' => $products
-        ], 200);
+            'status' => 'Failed',
+            'message' => 'Produk tidak ditemukan di database.',
+            'keyword_yang_dicari' => $keyword
+        ], 404);
     }
-
-    return response()->json([
-        'status' => 'Failed',
-        'message' => 'Produk tidak ditemukan di database.',
-        'keyword_yang_dicari' => $keyword
-    ], 404);
-}
 }
