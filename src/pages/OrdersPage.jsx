@@ -3,157 +3,337 @@ import { getOrders, createOrder, updateStatus, deleteOrder } from '../services/o
 import { getUsers } from '../services/userService';
 import { getProducts } from '../services/productService';
 
+const STATUS_FLOW = ['pending', 'processing', 'completed', 'cancelled'];
+
 export default function OrdersPage() {
-    const [orders, setOrders]   = useState([]);
-    const [users, setUsers]     = useState([]);
+    const [orders, setOrders]     = useState([]);
+    const [users, setUsers]       = useState([]);
     const [products, setProducts] = useState([]);
-    const [message, setMessage] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [form, setForm]       = useState({ user_id: '', product_id: '', quantity: 1 });
+    const [loading, setLoading]   = useState(false);
+    const [showForm, setShowForm] = useState(false);
+    const [message, setMessage]   = useState({ text: '', type: '' });
+    const [filter, setFilter]     = useState('all');
+    const [form, setForm]         = useState({ user_id: '', product_id: '', quantity: 1 });
 
     const loadAll = async () => {
-        const [o, u, p] = await Promise.all([getOrders(), getUsers(), getProducts()]);
-        setOrders(o.data);
-        setUsers(u.data);
-        setProducts(p.data);
-    };
-
-    useEffect(() => { loadAll(); }, []);
-
-    const handleCreate = async () => {
-        if (!form.user_id || !form.product_id || !form.quantity) {
-            return setMessage('❌ Semua field wajib diisi!');
-        }
         setLoading(true);
         try {
-            const res = await createOrder(form);
-            setMessage(`✅ Order berhasil! ${res.data.user_name} membeli ${res.data.product_name} x${form.quantity} = Rp ${Number(res.data.total_price).toLocaleString('id-ID')}`);
-            setForm({ user_id: '', product_id: '', quantity: 1 });
-            loadAll();
-        } catch (err) {
-            setMessage('❌ Gagal: ' + (err.response?.data?.message || err.message));
+            const [o, u, p] = await Promise.all([getOrders(), getUsers(), getProducts()]);
+            setOrders(o.data);
+            setUsers(u.data);
+            setProducts(p.data);
+        } catch {
+            showMsg('Gagal memuat data. Pastikan semua service berjalan.', 'error');
         }
         setLoading(false);
     };
 
-    const handleStatus = async (id) => {
-        const status = window.prompt('Status baru (pending/processing/completed/cancelled):');
-        if (!status) return;
-        await updateStatus(id, status);
-        setMessage('✅ Status diperbarui');
+    useEffect(() => { loadAll(); }, []);
+
+    const showMsg = (text, type = 'success') => {
+        setMessage({ text, type });
+        setTimeout(() => setMessage({ text: '', type: '' }), 4000);
+    };
+
+    const handleCreate = async () => {
+        if (!form.user_id || !form.product_id || !form.quantity)
+            return showMsg('Semua field wajib diisi!', 'error');
+        try {
+            const res = await createOrder(form);
+            showMsg(`✅ Order berhasil! ${res.data.user_name} — ${res.data.product_name} (${res.data.quantity}x)`);
+            setForm({ user_id: '', product_id: '', quantity: 1 });
+            setShowForm(false);
+            loadAll();
+        } catch (err) {
+            showMsg('Gagal: ' + (err.response?.data?.message || err.message), 'error');
+        }
+    };
+
+    const handleNextStatus = async (id, currentStatus) => {
+        const idx = STATUS_FLOW.indexOf(currentStatus);
+        if (idx === -1 || idx >= 2) return; // stop at completed
+        const next = STATUS_FLOW[idx + 1];
+        await updateStatus(id, next);
+        showMsg(`Status diubah → ${next}`);
         loadAll();
     };
 
     const handleDelete = async (id) => {
         if (!window.confirm('Hapus order ini?')) return;
         await deleteOrder(id);
-        setMessage('✅ Order dihapus');
+        showMsg('Order dihapus.');
         loadAll();
     };
 
-    const getUserName    = (id) => users.find(u => u.id === id)?.name || `User #${id}`;
-    const getProductName = (id) => products.find(p => p.id === id)?.name || `Product #${id}`;
+    const getUserName    = id => users.find(u => u.id === id)?.name || `User #${id}`;
+    const getProductName = id => products.find(p => p.id === id)?.name || `Produk #${id}`;
+    const getProductPrice = id => products.find(p => p.id === id)?.price || 0;
+
+    const filteredOrders = filter === 'all' ? orders : orders.filter(o => o.status === filter);
+
+    const stats = {
+        total: orders.length,
+        pending: orders.filter(o => o.status === 'pending').length,
+        processing: orders.filter(o => o.status === 'processing').length,
+        completed: orders.filter(o => o.status === 'completed').length,
+        revenue: orders.filter(o => o.status === 'completed').reduce((s, o) => s + Number(o.total_price), 0),
+    };
+
+    const selectedProduct = products.find(p => p.id === Number(form.product_id));
+    const estimatedTotal = selectedProduct ? Number(selectedProduct.price) * Number(form.quantity) : 0;
 
     return (
-        <div style={styles.container}>
-            <h2>🛒 Order Management</h2>
-            <p style={styles.info}>
-                ℹ️ Saat membuat order, OrderService secara otomatis mengambil data dari
-                <strong> UserService</strong> dan <strong>ProductService</strong>.
-            </p>
-
-            {/* Form Buat Order */}
-            <div style={styles.card}>
-                <h3>Buat Order Baru</h3>
-                <label style={styles.label}>Pilih User (dari UserService)</label>
-                <select value={form.user_id}
-                    onChange={e => setForm({...form, user_id: e.target.value})}
-                    style={styles.select}>
-                    <option value="">-- Pilih User --</option>
-                    {users.map(u => (
-                        <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
-                    ))}
-                </select>
-
-                <label style={styles.label}>Pilih Produk (dari ProductService)</label>
-                <select value={form.product_id}
-                    onChange={e => setForm({...form, product_id: e.target.value})}
-                    style={styles.select}>
-                    <option value="">-- Pilih Produk --</option>
-                    {products.map(p => (
-                        <option key={p.id} value={p.id}>
-                            {p.name} — Rp {Number(p.price).toLocaleString('id-ID')} (Stok: {p.stock})
-                        </option>
-                    ))}
-                </select>
-
-                <label style={styles.label}>Jumlah</label>
-                <input type="number" min="1" value={form.quantity}
-                    onChange={e => setForm({...form, quantity: e.target.value})}
-                    style={styles.input}
-                />
-
-                <button onClick={handleCreate} disabled={loading} style={styles.btnPrimary}>
-                    {loading ? '⏳ Memproses...' : '🛒 Buat Order'}
+        <div style={styles.page}>
+            {/* Header */}
+            <div style={styles.header}>
+                <div>
+                    <div style={styles.pageTag}>OrderService — Port 8003</div>
+                    <h2 style={styles.title}>Order Management</h2>
+                    <p style={styles.subtitle}>Buat & kelola transaksi — terintegrasi dengan UserService & ProductService</p>
+                </div>
+                <button onClick={() => setShowForm(!showForm)} style={styles.btnAdd}>
+                    <span>{showForm ? '✕' : '+'}</span>
+                    <span>{showForm ? 'Tutup' : 'Buat Order'}</span>
                 </button>
-                {message && <p style={styles.message}>{message}</p>}
             </div>
 
-            {/* Daftar Order */}
+            {/* Stats */}
+            <div style={styles.statsRow}>
+                {[
+                    { label: 'Total Order', value: stats.total, icon: '🛒', color: '#4f8ef7' },
+                    { label: 'Pending', value: stats.pending, icon: '⏳', color: '#f59e0b', clickFilter: 'pending' },
+                    { label: 'Diproses', value: stats.processing, icon: '⟳', color: '#4f8ef7', clickFilter: 'processing' },
+                    { label: 'Selesai', value: stats.completed, icon: '✓', color: '#10b981', clickFilter: 'completed' },
+                    { label: 'Pendapatan', value: 'Rp ' + stats.revenue.toLocaleString('id-ID'), icon: '💰', color: '#a855f7' },
+                ].map(s => (
+                    <div key={s.label} style={{
+                        ...styles.statCard,
+                        cursor: s.clickFilter ? 'pointer' : 'default',
+                        borderColor: filter === s.clickFilter ? `${s.color}40` : 'rgba(255,255,255,0.06)',
+                    }}
+                        onClick={() => s.clickFilter && setFilter(filter === s.clickFilter ? 'all' : s.clickFilter)}
+                    >
+                        <div style={{ ...styles.statIcon, backgroundColor: `${s.color}18` }}>{s.icon}</div>
+                        <div>
+                            <div style={{ ...styles.statValue, color: s.color }}>{s.value}</div>
+                            <div style={styles.statLabel}>{s.label}</div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Toast */}
+            {message.text && (
+                <div style={{ ...styles.toast, ...(message.type === 'error' ? styles.toastError : styles.toastSuccess) }}>
+                    <span>{message.type === 'error' ? '⚠️' : '✅'}</span>
+                    <span>{message.text}</span>
+                </div>
+            )}
+
+            {/* Form Buat Order */}
+            {showForm && (
+                <div style={styles.card}>
+                    <h3 style={styles.cardTitle}>
+                        <span>🛒</span> Buat Order Baru
+                        <span style={styles.infoBadge}>
+                            ⚡ OrderService otomatis tarik data dari UserService & ProductService
+                        </span>
+                    </h3>
+                    <div style={styles.formGrid}>
+                        <div style={styles.fieldGroup}>
+                            <label style={styles.label}>Pilih User (dari UserService)</label>
+                            <select value={form.user_id}
+                                onChange={e => setForm({ ...form, user_id: e.target.value })}
+                                style={styles.select}>
+                                <option value="">— Pilih User —</option>
+                                {users.map(u => (
+                                    <option key={u.id} value={u.id}>{u.name} — {u.email}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div style={styles.fieldGroup}>
+                            <label style={styles.label}>Pilih Produk (dari ProductService)</label>
+                            <select value={form.product_id}
+                                onChange={e => setForm({ ...form, product_id: e.target.value })}
+                                style={styles.select}>
+                                <option value="">— Pilih Produk —</option>
+                                {products.map(p => (
+                                    <option key={p.id} value={p.id}>
+                                        {p.name} — Rp {Number(p.price).toLocaleString('id-ID')} (Stok: {p.stock})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div style={styles.fieldGroup}>
+                            <label style={styles.label}>Jumlah</label>
+                            <input type="number" min="1" value={form.quantity}
+                                onChange={e => setForm({ ...form, quantity: e.target.value })}
+                                style={styles.input}
+                                onFocus={e => e.target.style.borderColor = '#f59e0b'}
+                                onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
+                            />
+                        </div>
+                        {/* Preview total */}
+                        {estimatedTotal > 0 && (
+                            <div style={styles.totalPreview}>
+                                <span style={styles.totalLabel}>Estimasi Total</span>
+                                <span style={styles.totalValue}>
+                                    Rp {estimatedTotal.toLocaleString('id-ID')}
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                    <div style={styles.formActions}>
+                        <button onClick={handleCreate} style={styles.btnYellow}>🛒 Konfirmasi Order</button>
+                        <button onClick={() => setShowForm(false)} style={styles.btnGhost}>Batal</button>
+                    </div>
+                </div>
+            )}
+
+            {/* Filter bar */}
+            {orders.length > 0 && (
+                <div style={styles.filterBar}>
+                    {['all', 'pending', 'processing', 'completed', 'cancelled'].map(f => (
+                        <button key={f} onClick={() => setFilter(f)}
+                            style={{ ...styles.filterBtn, ...(filter === f ? styles.filterBtnActive : {}) }}>
+                            {f === 'all' ? 'Semua' : f.charAt(0).toUpperCase() + f.slice(1)}
+                            <span style={styles.filterCount}>
+                                {f === 'all' ? orders.length : orders.filter(o => o.status === f).length}
+                            </span>
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {/* Orders Table */}
             <div style={styles.card}>
-                <h3>Daftar Order ({orders.length})</h3>
-                <table style={styles.table}>
-                    <thead>
-                        <tr style={styles.thead}>
-                            <th>ID</th><th>User</th><th>Produk</th>
-                            <th>Qty</th><th>Total</th><th>Status</th><th>Aksi</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {orders.map(o => (
-                            <tr key={o.id} style={styles.tr}>
-                                <td>{o.id}</td>
-                                <td>{getUserName(o.user_id)}</td>
-                                <td>{getProductName(o.product_id)}</td>
-                                <td>{o.quantity}</td>
-                                <td>Rp {Number(o.total_price).toLocaleString('id-ID')}</td>
-                                <td>
-                                    <span style={{
-                                        ...styles.badge,
-                                        backgroundColor:
-                                            o.status === 'completed'  ? '#00b894' :
-                                            o.status === 'processing' ? '#0984e3' :
-                                            o.status === 'cancelled'  ? '#e74c3c' : '#fdcb6e'
-                                    }}>
-                                        {o.status}
-                                    </span>
-                                </td>
-                                <td>
-                                    <button onClick={() => handleStatus(o.id)} style={styles.btnInfo}>✏️</button>
-                                    <button onClick={() => handleDelete(o.id)} style={styles.btnDanger}>🗑️</button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                <h3 style={styles.cardTitle}>
+                    <span>📋</span>
+                    Daftar Order
+                    <span style={styles.badge}>{filteredOrders.length}</span>
+                </h3>
+                {loading ? (
+                    <div style={styles.loadingState}>
+                        <div style={styles.spinner} />
+                        <span>Memuat data dari semua service...</span>
+                    </div>
+                ) : filteredOrders.length === 0 ? (
+                    <div style={styles.emptyState}>
+                        <span style={{ fontSize: '40px' }}>🛒</span>
+                        <p>{orders.length === 0 ? 'Belum ada order. Buat yang pertama!' : 'Tidak ada order dengan filter ini.'}</p>
+                    </div>
+                ) : (
+                    <div style={styles.tableWrap}>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>User</th>
+                                    <th>Produk</th>
+                                    <th>Qty</th>
+                                    <th>Total</th>
+                                    <th>Status</th>
+                                    <th style={{ textAlign: 'right' }}>Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredOrders.map(o => (
+                                    <tr key={o.id}>
+                                        <td><span style={styles.idBadge}>#{o.id}</span></td>
+                                        <td style={{ fontWeight: '600', color: '#f1f5f9' }}>{getUserName(o.user_id)}</td>
+                                        <td style={{ color: '#94a3b8' }}>{getProductName(o.product_id)}</td>
+                                        <td style={{ fontFamily: 'JetBrains Mono, monospace', color: '#94a3b8' }}>×{o.quantity}</td>
+                                        <td style={{ fontWeight: '700', color: '#f59e0b', fontFamily: 'JetBrains Mono, monospace', fontSize: '13px' }}>
+                                            Rp {Number(o.total_price).toLocaleString('id-ID')}
+                                        </td>
+                                        <td><StatusBadge status={o.status} /></td>
+                                        <td>
+                                            <div style={styles.actionGroup}>
+                                                {o.status !== 'completed' && o.status !== 'cancelled' && (
+                                                    <button onClick={() => handleNextStatus(o.id, o.status)} style={styles.btnAdvance}>
+                                                        ▶ Lanjut
+                                                    </button>
+                                                )}
+                                                <button onClick={() => handleDelete(o.id)} style={styles.btnDanger}>
+                                                    🗑️
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
             </div>
         </div>
     );
 }
 
+function StatusBadge({ status }) {
+    const map = {
+        completed:  { bg: 'rgba(16,185,129,0.12)', color: '#10b981', border: 'rgba(16,185,129,0.25)', label: '✓ Selesai' },
+        processing: { bg: 'rgba(79,142,247,0.12)',  color: '#4f8ef7', border: 'rgba(79,142,247,0.25)', label: '⟳ Proses' },
+        cancelled:  { bg: 'rgba(239,68,68,0.12)',   color: '#ef4444', border: 'rgba(239,68,68,0.25)', label: '✕ Batal' },
+        pending:    { bg: 'rgba(245,158,11,0.12)',  color: '#f59e0b', border: 'rgba(245,158,11,0.25)', label: '⏳ Pending' },
+    };
+    const s = map[status] || map.pending;
+    return (
+        <span style={{ backgroundColor: s.bg, color: s.color, border: `1px solid ${s.border}`, padding: '4px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: '700', whiteSpace: 'nowrap' }}>
+            {s.label}
+        </span>
+    );
+}
+
 const styles = {
-    container: { padding: '24px', maxWidth: '1100px', margin: '0 auto' },
-    card:      { backgroundColor: '#f9f9f9', padding: '20px', borderRadius: '8px', marginBottom: '24px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' },
-    info:      { backgroundColor: '#dfe6e9', padding: '12px', borderRadius: '6px', marginBottom: '16px' },
-    label:     { display: 'block', fontWeight: '600', marginBottom: '4px', marginTop: '10px' },
-    input:     { width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '6px', border: '1px solid #ccc', boxSizing: 'border-box' },
-    select:    { width: '100%', padding: '10px', marginBottom: '10px', borderRadius: '6px', border: '1px solid #ccc', boxSizing: 'border-box' },
-    table:     { width: '100%', borderCollapse: 'collapse' },
-    thead:     { backgroundColor: '#e94560', color: 'white' },
-    tr:        { borderBottom: '1px solid #ddd' },
-    badge:     { color: 'white', padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold' },
-    message:   { marginTop: '8px', fontWeight: 'bold' },
-    btnPrimary:{ backgroundColor: '#e94560', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '6px', cursor: 'pointer', fontSize: '15px', marginTop: '8px' },
-    btnInfo:   { backgroundColor: '#0984e3', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', marginRight: '4px' },
-    btnDanger: { backgroundColor: '#e74c3c', color: 'white', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer' },
+    page: { padding: '32px 24px', maxWidth: '1200px', margin: '0 auto', animation: 'fadeInUp 0.35s ease' },
+    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' },
+    pageTag: { fontSize: '11px', fontWeight: '700', color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '6px' },
+    title: { fontSize: '26px', fontWeight: '800', color: '#f1f5f9', letterSpacing: '-0.5px', margin: 0 },
+    subtitle: { fontSize: '13px', color: '#64748b', marginTop: '4px', maxWidth: '500px' },
+
+    statsRow: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', marginBottom: '24px' },
+    statCard: { backgroundColor: '#161d2f', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '12px', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '12px', transition: 'border-color 0.2s ease' },
+    statIcon: { width: '36px', height: '36px', borderRadius: '9px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 },
+    statValue: { fontSize: '16px', fontWeight: '800', letterSpacing: '-0.4px', lineHeight: 1.2 },
+    statLabel: { fontSize: '10px', color: '#475569', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: '2px' },
+
+    card: { backgroundColor: '#161d2f', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '20px', overflow: 'hidden' },
+    cardTitle: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: '700', color: '#f1f5f9', padding: '18px 20px 16px', margin: 0, flexWrap: 'wrap' },
+    badge: { backgroundColor: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '2px 8px', borderRadius: '20px', fontSize: '11px', fontWeight: '700' },
+    infoBadge: { backgroundColor: 'rgba(79,142,247,0.1)', color: '#4f8ef7', padding: '4px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: '600', marginLeft: '4px' },
+
+    formGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr 200px', gap: '14px', padding: '0 20px', alignItems: 'end' },
+    fieldGroup: { display: 'flex', flexDirection: 'column', gap: '6px' },
+    label: { fontSize: '11px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' },
+    input: { width: '100%', padding: '11px 14px', backgroundColor: '#1e2638', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#f1f5f9', fontSize: '14px', outline: 'none', transition: 'border-color 0.2s ease', fontFamily: 'Plus Jakarta Sans, sans-serif' },
+    select: { width: '100%', padding: '11px 14px', backgroundColor: '#1e2638', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#f1f5f9', fontSize: '14px', outline: 'none', fontFamily: 'Plus Jakarta Sans, sans-serif' },
+    formActions: { display: 'flex', gap: '10px', padding: '18px 20px' },
+
+    totalPreview: { display: 'flex', flexDirection: 'column', gap: '4px', justifyContent: 'flex-end', paddingBottom: '2px' },
+    totalLabel: { fontSize: '10px', fontWeight: '600', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' },
+    totalValue: { fontSize: '20px', fontWeight: '800', color: '#f59e0b', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '-0.5px' },
+
+    filterBar: { display: 'flex', gap: '6px', marginBottom: '16px', flexWrap: 'wrap' },
+    filterBtn: { backgroundColor: 'rgba(255,255,255,0.04)', color: '#64748b', border: '1px solid rgba(255,255,255,0.06)', padding: '6px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s ease' },
+    filterBtnActive: { backgroundColor: 'rgba(245,158,11,0.12)', color: '#f59e0b', borderColor: 'rgba(245,158,11,0.3)' },
+    filterCount: { backgroundColor: 'rgba(255,255,255,0.08)', padding: '1px 6px', borderRadius: '10px', fontSize: '11px' },
+
+    tableWrap: { overflowX: 'auto' },
+    idBadge: { backgroundColor: 'rgba(255,255,255,0.06)', color: '#94a3b8', padding: '3px 8px', borderRadius: '6px', fontSize: '12px', fontFamily: 'JetBrains Mono, monospace' },
+    actionGroup: { display: 'flex', gap: '6px', justifyContent: 'flex-end' },
+
+    toast: { display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', borderRadius: '10px', marginBottom: '16px', fontSize: '14px', fontWeight: '500' },
+    toastSuccess: { backgroundColor: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981' },
+    toastError: { backgroundColor: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444' },
+
+    loadingState: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '48px', color: '#64748b' },
+    spinner: { width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.1)', borderTopColor: '#f59e0b', borderRadius: '50%', animation: 'spin 0.8s linear infinite' },
+    emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '48px', color: '#475569' },
+
+    btnAdd: { display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#f59e0b', color: '#0a0e1a', border: 'none', padding: '10px 18px', borderRadius: '9px', cursor: 'pointer', fontSize: '14px', fontWeight: '800', boxShadow: '0 0 20px rgba(245,158,11,0.25)', flexShrink: 0 },
+    btnYellow: { backgroundColor: '#f59e0b', color: '#0a0e1a', border: 'none', padding: '11px 20px', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '800' },
+    btnAdvance: { backgroundColor: 'rgba(79,142,247,0.12)', color: '#4f8ef7', border: '1px solid rgba(79,142,247,0.25)', padding: '6px 12px', borderRadius: '7px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', whiteSpace: 'nowrap' },
+    btnDanger: { backgroundColor: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)', padding: '6px 10px', borderRadius: '7px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' },
+    btnGhost: { backgroundColor: 'transparent', color: '#64748b', border: '1px solid rgba(255,255,255,0.08)', padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' },
 };
