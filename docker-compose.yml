@@ -1,0 +1,198 @@
+version: "3.9"
+
+networks:
+  microservice-net:
+    driver: bridge
+
+volumes:
+  user-db-data:
+  product-db-data:
+  order-db-data:
+
+services:
+
+  # ═══════════════════════════════════════════
+  # RABBITMQ — Message Broker
+  # ═══════════════════════════════════════════
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"     # AMQP (untuk service connect)
+      - "15672:15672"   # Management UI (buka di browser)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - microservice-net
+
+  # ═══════════════════════════════════════════
+  # USER SERVICE DATABASE
+  # ═══════════════════════════════════════════
+  user-db:
+    image: mysql:8
+    container_name: user-db
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: userservice_db
+    volumes:
+      - user-db-data:/var/lib/mysql
+    networks:
+      - microservice-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-psecret"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ═══════════════════════════════════════════
+  # USER SERVICE — Laravel
+  # ═══════════════════════════════════════════
+  user-service:
+    build:
+      context: ./UserService
+      dockerfile: Dockerfile
+    container_name: user-service
+    ports:
+      - "8001:8000"
+    env_file:
+      - ./UserService/.env.docker
+    depends_on:
+      user-db:
+        condition: service_healthy
+    networks:
+      - microservice-net
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════
+  # PRODUCT SERVICE DATABASE
+  # ═══════════════════════════════════════════
+  product-db:
+    image: mysql:8
+    container_name: product-db
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: productservice_db
+    volumes:
+      - product-db-data:/var/lib/mysql
+    networks:
+      - microservice-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-psecret"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ═══════════════════════════════════════════
+  # PRODUCT SERVICE — Laravel (HTTP)
+  # ═══════════════════════════════════════════
+  product-service:
+    build:
+      context: ./ProductService
+      dockerfile: Dockerfile
+    container_name: product-service
+    ports:
+      - "8002:8000"
+    env_file:
+      - ./ProductService/.env.docker
+    depends_on:
+      product-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - microservice-net
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════
+  # PRODUCT SERVICE WORKER — RabbitMQ Consumer
+  # ═══════════════════════════════════════════
+  product-worker:
+    build:
+      context: ./ProductService
+      dockerfile: Dockerfile
+    container_name: product-worker
+    env_file:
+      - ./ProductService/.env.docker
+    depends_on:
+      product-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - microservice-net
+    restart: unless-stopped
+    # Override CMD: jalankan queue worker bukan web server
+    command: php artisan queue:work rabbitmq --queue=product-stock-update --verbose --tries=3 --timeout=90
+
+  # ═══════════════════════════════════════════
+  # ORDER SERVICE DATABASE
+  # ═══════════════════════════════════════════
+  order-db:
+    image: mysql:8
+    container_name: order-db
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: orderservice_db
+    volumes:
+      - order-db-data:/var/lib/mysql
+    networks:
+      - microservice-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-psecret"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ═══════════════════════════════════════════
+  # ORDER SERVICE — Node.js + Express
+  # ═══════════════════════════════════════════
+  order-service:
+    build:
+      context: ./OrderService
+      dockerfile: Dockerfile
+    container_name: order-service
+    ports:
+      - "8003:8003"
+    env_file:
+      - ./OrderService/.env.docker
+    depends_on:
+      order-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      product-service:
+        condition: service_started
+    networks:
+      - microservice-net
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════
+  # UI — React.js (Nginx)
+  # ═══════════════════════════════════════════
+  ui:
+    build:
+      context: ./UserInterface
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_USER_SERVICE_URL=http://localhost:8001
+        - REACT_APP_PRODUCT_SERVICE_URL=http://localhost:8002
+        - REACT_APP_ORDER_SERVICE_URL=http://localhost:8003
+    container_name: ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - user-service
+      - product-service
+      - order-service
+    networks:
+      - microservice-net
+    restart: unless-stopped
