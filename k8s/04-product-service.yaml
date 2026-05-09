@@ -1,0 +1,96 @@
+# ── Product Service HTTP ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  namespace: microservice-iae
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-service
+  template:
+    metadata:
+      labels:
+        app: product-service
+    spec:
+      containers:
+        - name: product-service
+          image: product-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DB_HOST
+              value: "product-db"
+            - name: DB_DATABASE
+              value: "productservice_db"
+            - name: DB_USERNAME
+              value: "root"
+            - name: DB_PASSWORD
+              value: "secret"
+            - name: QUEUE_CONNECTION
+              value: "rabbitmq"
+            - name: RABBITMQ_HOST
+              value: "rabbitmq"
+            - name: RABBITMQ_QUEUE
+              value: "product-stock-update"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: microservice-iae
+spec:
+  selector:
+    app: product-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30802
+  type: NodePort
+---
+# ── Product Worker (RabbitMQ Consumer) ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-worker
+  namespace: microservice-iae
+spec:
+  replicas: 1 # ← bisa scale up untuk lebih banyak consumer
+  selector:
+    matchLabels:
+      app: product-worker
+  template:
+    metadata:
+      labels:
+        app: product-worker
+    spec:
+      containers:
+        - name: product-worker
+          image: product-service:latest
+          imagePullPolicy: Never
+          command:
+            [
+              "php",
+              "artisan",
+              "queue:work",
+              "rabbitmq",
+              "--queue=product-stock-update",
+              "--tries=3",
+            ]
+          env:
+            - name: DB_HOST
+              value: "product-db"
+            - name: DB_DATABASE
+              value: "productservice_db"
+            - name: DB_USERNAME
+              value: "root"
+            - name: DB_PASSWORD
+              value: "secret"
+            - name: QUEUE_CONNECTION
+              value: "rabbitmq"
+            - name: RABBITMQ_HOST
+              value: "rabbitmq"
+            - name: RABBITMQ_QUEUE
+              value: "product-stock-update"

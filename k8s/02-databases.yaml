@@ -1,0 +1,123 @@
+# ── USER DATABASE ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-db
+  namespace: microservice-iae
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-db
+  template:
+    metadata:
+      labels:
+        app: user-db
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "secret"
+            - name: MYSQL_DATABASE
+              value: "userservice_db"
+          ports:
+            - containerPort: 3306
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-db
+  namespace: microservice-iae
+spec:
+  selector:
+    app: user-db
+  ports:
+    - port: 3306
+      targetPort: 3306
+---
+# ── PRODUCT DATABASE ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-db
+  namespace: microservice-iae
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-db
+  template:
+    metadata:
+      labels:
+        app: product-db
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "secret"
+            - name: MYSQL_DATABASE
+              value: "productservice_db"
+          ports:
+            - containerPort: 3306
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-db
+  namespace: microservice-iae
+spec:
+  selector:
+    app: product-db
+  ports:
+    - port: 3306
+      targetPort: 3306
+---
+# ── ORDER DATABASE ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-db
+  namespace: microservice-iae
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-db
+  template:
+    metadata:
+      labels:
+        app: order-db
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "secret"
+            - name: MYSQL_DATABASE
+              value: "orderservice_db"
+          ports:
+            - containerPort: 3306
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-db
+  namespace: microservice-iae
+spec:
+  selector:
+    app: order-db
+  ports:
+    - port: 3306
+      targetPort: 3306

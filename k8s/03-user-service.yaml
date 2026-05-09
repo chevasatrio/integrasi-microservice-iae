@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: microservice-iae
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+        - name: user-service
+          image: user-service:latest # ← nama image dari docker build
+          imagePullPolicy: Never # ← pakai image lokal Docker Desktop
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DB_HOST
+              value: "user-db"
+            - name: DB_DATABASE
+              value: "userservice_db"
+            - name: DB_USERNAME
+              value: "root"
+            - name: DB_PASSWORD
+              value: "secret"
+            - name: QUEUE_CONNECTION
+              value: "sync"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: microservice-iae
+spec:
+  selector:
+    app: user-service
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30801
+  type: NodePort
