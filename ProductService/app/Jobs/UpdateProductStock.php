@@ -9,6 +9,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class UpdateProductStock implements ShouldQueue
 {
@@ -16,55 +17,88 @@ class UpdateProductStock implements ShouldQueue
 
     public int $tries = 3;
 
+    /**
+     * Constructor
+     * Saat dikirim dari Node.js, properti ini mungkin kosong, 
+     * jadi kita buat opsional (null).
+     */
     public function __construct(
-        public readonly string $productId,
-        public readonly int $quantity,
-        public readonly string $orderId,
-    ) {
+        public $productId = null,
+        public $quantity = null,
+        public $orderId = null,
+    ) {}
+    /**
+     * Handle Job
+     * Parameter $data akan berisi isi dari key 'data' yang dikirim Node.js
+     */
+    public function handle($data = null): void
+    {
+        try {
+            // 1. Pemetaan Data (Mapping)
+            // Kita ambil dari $data (jika dari Node.js) atau dari $this (jika dari Laravel sendiri)
+            $id = $data['productId'] ?? $this->productId;
+            $qty = (int) ($data['quantity'] ?? $this->quantity ?? 0);
+
+            Log::info("[ProductService Consumer] Memulai proses Job", [
+                'target_id' => $id,
+                'qty' => $qty,
+                'source' => $data ? 'RabbitMQ (Node.js)' : 'Internal Laravel'
+            ]);
+
+            // 2. Validasi ID
+            if (!$id) {
+                Log::error("[ProductService Consumer] Gagal: Product ID kosong.");
+                return;
+            }
+
+            // 3. Eksekusi ke Database
+            $product = Product::find($id);
+
+            if (!$product) {
+                Log::error("[ProductService Consumer] Gagal: Produk ID {$id} tidak ditemukan di database.");
+                // Jika pakai MySQL, pastikan ID-nya benar.
+                return;
+            }
+
+            // 4. Validasi Stok
+            if ($product->stock < $qty) {
+                Log::warning("[ProductService Consumer] Gagal: Stok tidak mencukupi.", [
+                    'produk' => $product->name,
+                    'sisa' => $product->stock,
+                    'diminta' => $qty
+                ]);
+                return;
+            }
+
+            // 5. Potong Stok
+            $stokLama = $product->stock;
+            $product->decrement('stock', $qty);
+
+            Log::info("[ProductService Consumer] ✅ SUKSES!", [
+                'produk' => $product->name,
+                'sebelum' => $stokLama,
+                'sesudah' => $product->stock
+            ]);
+        } catch (Throwable $e) {
+            // Tangkap error apapun dan catat di log agar tidak misterius
+            Log::error("[ProductService Consumer] CRASH saat eksekusi Job!", [
+                'pesan' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'baris' => $e->getLine()
+            ]);
+
+            // Lempar kembali error-nya agar Laravel tahu Job ini FAIL
+            throw $e;
+        }
     }
 
     /**
-     * CONSUMER — dieksekusi oleh queue worker saat menerima pesan dari RabbitMQ
-     * Pesan dikirim oleh OrderService saat order berhasil dibuat
+     * Jika Job gagal setelah semua percobaan
      */
-    public function handle(): void
+    public function failed(Throwable $exception): void
     {
-        Log::info("[ProductService Consumer] Menerima pesan dari RabbitMQ", [
-            'product_id' => $this->productId,
-            'quantity' => $this->quantity,
-            'order_id' => $this->orderId,
+        Log::error("[ProductService Consumer] Job menyerah setelah 3x coba.", [
+            'error' => $exception->getMessage()
         ]);
-
-        $product = Product::find($this->productId);
-
-        if (!$product) {
-            Log::error("[ProductService Consumer] Produk tidak ditemukan: {$this->productId}");
-            return;
-        }
-
-        if ($product->stock < $this->quantity) {
-            Log::warning("[ProductService Consumer] Stok tidak mencukupi", [
-                'stok_ada' => $product->stock,
-                'diminta' => $this->quantity,
-            ]);
-            return;
-        }
-
-        // Kurangi stok (proses async — dikerjakan di background)
-        $stokSebelum = $product->stock;
-        $product->stock -= $this->quantity;
-        $product->save();
-
-        Log::info("[ProductService Consumer] Stok berhasil dikurangi", [
-            'product_id' => $this->productId,
-            'stok_sebelum' => $stokSebelum,
-            'stok_sesudah' => $product->stock,
-            'order_id' => $this->orderId,
-        ]);
-    }
-
-    public function failed(\Throwable $exception): void
-    {
-        Log::error("[ProductService Consumer] Job gagal: " . $exception->getMessage());
     }
 }

@@ -1,4 +1,4 @@
-!/bin/bash
+# bin/sh
 # UserService/docker-entrypoint.sh
 
 set -e

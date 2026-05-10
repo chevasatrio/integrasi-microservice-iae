@@ -19,7 +19,7 @@ spec:
           image: mysql:8
           env:
             - name: MYSQL_ROOT_PASSWORD
-              value: "secret"
+              value: "root"
             - name: MYSQL_DATABASE
               value: "userservice_db"
           ports:
