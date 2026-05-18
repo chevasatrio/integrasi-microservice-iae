@@ -17,88 +17,103 @@ class UpdateProductStock implements ShouldQueue
 
     public int $tries = 3;
 
-    /**
-     * Constructor
-     * Saat dikirim dari Node.js, properti ini mungkin kosong, 
-     * jadi kita buat opsional (null).
-     */
+    // Constructor tetap ada untuk jaga-jaga jika dipanggil dari Laravel internal
     public function __construct(
         public $productId = null,
         public $quantity = null,
         public $orderId = null,
-    ) {}
+    ) {
+    }
+
     /**
-     * Handle Job
-     * Parameter $data akan berisi isi dari key 'data' yang dikirim Node.js
+     * ✅ FIX UTAMA:
+     * handle() TIDAK menerima parameter $data dari Laravel.
+     * Data dari RabbitMQ harus dibaca via $this->job->getRawBody()
+     *
+     * Alur:
+     * Node.js (publisher) → RabbitMQ queue → Laravel worker → handle() ini
      */
-    public function handle($data = null): void
+    public function handle(): void
     {
         try {
-            // 1. Pemetaan Data (Mapping)
-            // Kita ambil dari $data (jika dari Node.js) atau dari $this (jika dari Laravel sendiri)
-            $id = $data['productId'] ?? $this->productId;
-            $qty = (int) ($data['quantity'] ?? $this->quantity ?? 0);
+            // ✅ FIX BUG 1: Baca raw payload dari RabbitMQ
+            $rawBody = $this->job->getRawBody();
+            $payload = json_decode($rawBody, true);
 
-            Log::info("[ProductService Consumer] Memulai proses Job", [
-                'target_id' => $id,
-                'qty' => $qty,
-                'source' => $data ? 'RabbitMQ (Node.js)' : 'Internal Laravel'
+            Log::info('[ProductService Consumer] Raw payload diterima dari RabbitMQ', [
+                'payload' => $payload
             ]);
 
-            // 2. Validasi ID
-            if (!$id) {
-                Log::error("[ProductService Consumer] Gagal: Product ID kosong.");
-                return;
-            }
+            // ✅ FIX BUG 2: Data ada di dalam key 'data' sesuai format rabbitmq.js
+            $data = $payload['data'] ?? [];
 
-            // 3. Eksekusi ke Database
-            $product = Product::find($id);
+            // Ambil productId dan quantity dari payload Node.js
+            $productId = $data['productId'] ?? $this->productId ?? null;
+            $quantity = (int) ($data['quantity'] ?? $this->quantity ?? 0);
+            $orderId = $data['orderId'] ?? $this->orderId ?? null;
 
-            if (!$product) {
-                Log::error("[ProductService Consumer] Gagal: Produk ID {$id} tidak ditemukan di database.");
-                // Jika pakai MySQL, pastikan ID-nya benar.
-                return;
-            }
+            Log::info('[ProductService Consumer] Data yang akan diproses', [
+                'product_id' => $productId,
+                'quantity' => $quantity,
+                'order_id' => $orderId,
+            ]);
 
-            // 4. Validasi Stok
-            if ($product->stock < $qty) {
-                Log::warning("[ProductService Consumer] Gagal: Stok tidak mencukupi.", [
-                    'produk' => $product->name,
-                    'sisa' => $product->stock,
-                    'diminta' => $qty
+            // Validasi: productId dan quantity harus ada
+            if (!$productId || $quantity <= 0) {
+                Log::error('[ProductService Consumer] ❌ Data tidak valid', [
+                    'productId' => $productId,
+                    'quantity' => $quantity,
+                    'raw_data' => $data,
                 ]);
                 return;
             }
 
-            // 5. Potong Stok
-            $stokLama = $product->stock;
-            $product->decrement('stock', $qty);
+            // Cari produk di database
+            $product = Product::find($productId);
 
-            Log::info("[ProductService Consumer] ✅ SUKSES!", [
+            if (!$product) {
+                Log::error("[ProductService Consumer] ❌ Produk ID {$productId} tidak ditemukan");
+                return;
+            }
+
+            // Validasi stok cukup
+            if ($product->stock < $quantity) {
+                Log::warning('[ProductService Consumer] ⚠️ Stok tidak mencukupi', [
+                    'produk' => $product->name,
+                    'stok_ada' => $product->stock,
+                    'diminta' => $quantity,
+                ]);
+                return;
+            }
+
+            // Kurangi stok
+            $stokSebelum = $product->stock;
+            $product->decrement('stock', $quantity);
+
+            Log::info('[ProductService Consumer] ✅ Stok berhasil dikurangi', [
                 'produk' => $product->name,
-                'sebelum' => $stokLama,
-                'sesudah' => $product->stock
+                'stok_sebelum' => $stokSebelum,
+                'stok_sesudah' => $product->fresh()->stock,
+                'order_id' => $orderId,
             ]);
+
         } catch (Throwable $e) {
-            // Tangkap error apapun dan catat di log agar tidak misterius
-            Log::error("[ProductService Consumer] CRASH saat eksekusi Job!", [
+            Log::error('[ProductService Consumer] ❌ CRASH saat eksekusi Job', [
                 'pesan' => $e->getMessage(),
                 'file' => $e->getFile(),
-                'baris' => $e->getLine()
+                'baris' => $e->getLine(),
             ]);
-
-            // Lempar kembali error-nya agar Laravel tahu Job ini FAIL
-            throw $e;
+            throw $e; // Lempar kembali agar Laravel retry
         }
     }
 
     /**
-     * Jika Job gagal setelah semua percobaan
+     * Dipanggil setelah semua percobaan gagal
      */
     public function failed(Throwable $exception): void
     {
-        Log::error("[ProductService Consumer] Job menyerah setelah 3x coba.", [
-            'error' => $exception->getMessage()
+        Log::error('[ProductService Consumer] ❌ Job menyerah setelah 3x percobaan', [
+            'error' => $exception->getMessage(),
         ]);
     }
 }

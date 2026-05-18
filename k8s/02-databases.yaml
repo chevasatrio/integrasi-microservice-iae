@@ -1,3 +1,5 @@
+# ✅ FIX: Samakan semua password menjadi 'root' (sebelumnya inconsistent: root/secret/secret)
+
 # ── USER DATABASE ──
 apiVersion: apps/v1
 kind: Deployment
@@ -19,7 +21,7 @@ spec:
           image: mysql:8
           env:
             - name: MYSQL_ROOT_PASSWORD
-              value: "root"
+              value: "root"              # ✅ konsisten dengan .env.docker
             - name: MYSQL_DATABASE
               value: "userservice_db"
           ports:
@@ -65,11 +67,18 @@ spec:
           image: mysql:8
           env:
             - name: MYSQL_ROOT_PASSWORD
-              value: "secret"
+              value: "root"              # ✅ FIX: sebelumnya "secret"
             - name: MYSQL_DATABASE
               value: "productservice_db"
           ports:
             - containerPort: 3306
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
 ---
 apiVersion: v1
 kind: Service
@@ -104,11 +113,18 @@ spec:
           image: mysql:8
           env:
             - name: MYSQL_ROOT_PASSWORD
-              value: "secret"
+              value: "root"              # ✅ FIX: sebelumnya "secret"
             - name: MYSQL_DATABASE
               value: "orderservice_db"
           ports:
             - containerPort: 3306
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
 ---
 apiVersion: v1
 kind: Service

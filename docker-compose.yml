@@ -1,16 +1,15 @@
-version: "3.9"
-
 networks:
   microservice-net:
     driver: bridge
-
+ 
 volumes:
   user-db-data:
   product-db-data:
   order-db-data:
-
+  rabbitmq-data:          # ✅ FIX: tambahkan volume RabbitMQ
+ 
 services:
-
+ 
   # ═══════════════════════════════════════════
   # RABBITMQ — Message Broker
   # ═══════════════════════════════════════════
@@ -19,19 +18,23 @@ services:
     container_name: rabbitmq
     hostname: rabbitmq
     ports:
-      - "5672:5672"     # AMQP (untuk service connect)
-      - "15672:15672"   # Management UI (buka di browser)
+      - "5672:5672"
+      - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_ERLANG_COOKIE: "MICROSERVICE_IAE_COOKIE"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq   # ✅ FIX: mount volume agar cookie persisten
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
-      timeout: 5s
-      retries: 10
+      timeout: 10s
+      retries: 15
+      start_period: 30s
     networks:
       - microservice-net
-
+ 
   # ═══════════════════════════════════════════
   # USER SERVICE DATABASE
   # ═══════════════════════════════════════════
@@ -48,9 +51,10 @@ services:
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+ 
   # ═══════════════════════════════════════════
   # USER SERVICE — Laravel
   # ═══════════════════════════════════════════
@@ -59,9 +63,10 @@ services:
       context: ./UserService
       dockerfile: Dockerfile
     container_name: user-service
-    entrypoint: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
     ports:
       - "8001:8000"
+    # ✅ FIX: HAPUS entrypoint override — biarkan docker-entrypoint.sh jalan
+    # entrypoint: ["php", "artisan", "serve"...]  <-- INI PENYEBAB MIGRASI TIDAK JALAN
     env_file:
       - ./UserService/.env.docker
     depends_on:
@@ -70,6 +75,7 @@ services:
     networks:
       - microservice-net
     restart: unless-stopped
+ 
   # ═══════════════════════════════════════════
   # PRODUCT SERVICE DATABASE
   # ═══════════════════════════════════════════
@@ -86,9 +92,10 @@ services:
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+ 
   # ═══════════════════════════════════════════
   # PRODUCT SERVICE — Laravel (HTTP)
   # ═══════════════════════════════════════════
@@ -99,7 +106,8 @@ services:
     container_name: product-service
     ports:
       - "8002:8000"
-    entrypoint: ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+    # ✅ FIX: HAPUS entrypoint override
+    # entrypoint: ["php", "artisan", "serve"...]  <-- INI PENYEBAB MIGRASI TIDAK JALAN
     env_file:
       - ./ProductService/.env.docker
     depends_on:
@@ -110,7 +118,7 @@ services:
     networks:
       - microservice-net
     restart: unless-stopped
-
+ 
   # ═══════════════════════════════════════════
   # PRODUCT SERVICE WORKER — RabbitMQ Consumer
   # ═══════════════════════════════════════════
@@ -129,9 +137,20 @@ services:
     networks:
       - microservice-net
     restart: unless-stopped
-    # Override CMD: jalankan queue worker bukan web server
-    command: php artisan queue:work rabbitmq --queue=product-stock-update --verbose --tries=3 --timeout=90
-
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "=== Product Worker Starting ==="
+        php artisan key:generate --no-interaction --force 2>/dev/null || true
+        echo "Menunggu database..."
+        for i in $(seq 1 30); do
+          mysqladmin ping -h product-db -u root -proot --silent 2>/dev/null && break
+          echo "Percobaan $i/30..."; sleep 3
+        done
+        php artisan migrate --force --no-interaction 2>/dev/null || true
+        echo "=== Worker mulai consume queue ==="
+        php artisan queue:work rabbitmq --queue=product-stock-update --verbose --tries=3 --timeout=90
+ 
   # ═══════════════════════════════════════════
   # ORDER SERVICE DATABASE
   # ═══════════════════════════════════════════
@@ -148,9 +167,10 @@ services:
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
       interval: 10s
-      timeout: 5s
-      retries: 10
-
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+ 
   # ═══════════════════════════════════════════
   # ORDER SERVICE — Node.js + Express
   # ═══════════════════════════════════════════
@@ -161,18 +181,16 @@ services:
     container_name: order-service
     ports:
       - "8003:8003"
-    # JURUS PAMUNGKAS: Paksa variabel masuk lewat sini
     environment:
-      - DB_HOST=order-db
-      - DB_PORT=3306
-      - DB_USER=root
-      - DB_PASSWORD=root
-      - DB_NAME=orderservice_db
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672
-      - USER_SERVICE_URL=http://user-service:8000
-      - PRODUCT_SERVICE_URL=http://product-service:8000
-    env_file:
-      - ./OrderService/.env.docker
+      PORT: 8003
+      DB_HOST: order-db
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: orderservice_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      USER_SERVICE_URL: http://user-service:8000
+      PRODUCT_SERVICE_URL: http://product-service:8000
     depends_on:
       order-db:
         condition: service_healthy
@@ -185,7 +203,7 @@ services:
     networks:
       - microservice-net
     restart: unless-stopped
-
+ 
   # ═══════════════════════════════════════════
   # UI — React.js (Nginx)
   # ═══════════════════════════════════════════
@@ -194,9 +212,9 @@ services:
       context: ./UserInterface
       dockerfile: Dockerfile
       args:
-        - REACT_APP_USER_SERVICE_URL=http://localhost:8001
-        - REACT_APP_PRODUCT_SERVICE_URL=http://localhost:8002
-        - REACT_APP_ORDER_SERVICE_URL=http://localhost:8003
+        REACT_APP_USER_SERVICE_URL: http://localhost:8001
+        REACT_APP_PRODUCT_SERVICE_URL: http://localhost:8002
+        REACT_APP_ORDER_SERVICE_URL: http://localhost:8003
     container_name: ui
     ports:
       - "3000:80"
